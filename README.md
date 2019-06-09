@@ -1,5 +1,7 @@
 # Kafka Health
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/chris-vest/kafka-health)](https://goreportcard.com/report/github.com/chris-vest/kafka-health)
+
 This program:
 
 1) Wakes up
