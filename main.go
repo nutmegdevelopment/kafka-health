@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sync"
 	"time"
 
 	kafka "github.com/segmentio/kafka-go"
@@ -30,6 +29,9 @@ func getKafkaReader(kafkaURL, topic, groupID string) *kafka.Reader {
 }
 
 func main() {
+	p1 := make(chan string)
+	c1 := make(chan string)
+
 	// get kafka writer using environment variables.
 	kafkaURL, err := os.LookupEnv("KAFKA_URL")
 	if err != true {
@@ -42,22 +44,26 @@ func main() {
 		return
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	go consume(c1, kafkaURL, topic)
+	go produce(p1, kafkaURL, topic)
 
-	go consume(&wg, kafkaURL, topic)
-	go produce(&wg, kafkaURL, topic)
+	pMsg := <-c1
+	cMsg := <-p1
 
-	wg.Wait()
+	if pMsg != cMsg {
+		log.Fatalln("Producer and consumer messages do not match.")
+	} else {
+		log.Println("Producer and consumer messages matched successfully.")
+	}
+
 	log.Println("All done.")
 }
 
-func produce(wg *sync.WaitGroup, kafkaURL string, topic string) {
-	defer wg.Done()
+func produce(p1 chan<- string, kafkaURL string, topic string) {
 	writer := newKafkaWriter(kafkaURL, topic)
 	// close writer upon exit
 	defer writer.Close()
-	log.Println("PRODUCER: Starting producing ...")
+	log.Println("PRODUCER: Producing health check message ...")
 	for i := 0; i < 1; i++ {
 		dt := time.Now()
 		msg := kafka.Message{
@@ -70,16 +76,17 @@ func produce(wg *sync.WaitGroup, kafkaURL string, topic string) {
 		} else {
 			log.Println("PRODUCER: Key:", string(msg.Key))
 			log.Println("PRODUCER: Value:", string(msg.Value))
+			p1 <- string(msg.Value)
 		}
 	}
 }
 
-func consume(wg *sync.WaitGroup, kafkaURL string, topic string) {
+func consume(c1 chan<- string, kafkaURL string, topic string) {
 	// Need to call this explicitly because of the for loop...
 	// Better way?
 	// defer wg.Done()
 	// Consume messages
-	log.Println("CONSUMER: Starting consuming ...")
+	log.Println("CONSUMER: Consuming health check message from LastOffset ...")
 	// Configure reader
 	rConf := kafka.ReaderConfig{
 		Brokers:   []string{kafkaURL},
@@ -94,18 +101,16 @@ func consume(wg *sync.WaitGroup, kafkaURL string, topic string) {
 	if err != nil {
 		log.Fatalln(err)
 	} else {
-		log.Printf("Successfully set offset to LastOffset")
+		log.Printf("CONSUMER: Successfully set offset to LastOffset")
 	}
 	for {
 		m, err := reader.ReadMessage(context.Background())
 		if err != nil {
 			log.Fatalln(err)
-			wg.Done()
 		} else {
-			log.Printf("message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
-			log.Printf("Closing reader")
+			log.Printf("CONSUMER: consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
 			defer reader.Close()
-			wg.Done()
+			c1 <- string(m.Value)
 		}
 	}
 }
