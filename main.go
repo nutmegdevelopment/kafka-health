@@ -2,14 +2,49 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	kafka "github.com/segmentio/kafka-go"
 )
+
+var (
+	successBinary = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "kafka_health_check_success",
+			Help: "Last health check success or failure.",
+		},
+	)
+)
+
+//SlackMessage is the struct that we will post to Incoming Slack Webhook URL
+type SlackMessage struct {
+	Message string `json:"text"`
+}
+
+//raiseSlackNotification does a HTTP POST to the Incoming Webhook Integration in your Slack Team
+func raiseSlackNotification(errorMessage string, slackURL string) {
+	postParams := SlackMessage{fmt.Sprintf("Kafka Health Check failed: %v", errorMessage)}
+
+	message, err := json.Marshal(postParams)
+	if err != nil {
+		log.Printf("Error in creating POST Message. Error : %v", err)
+		return
+	}
+	v := url.Values{"payload": {string(message)}}
+	_, err = http.PostForm(slackURL, v)
+	if err != nil {
+		log.Printf("Error in sending Slack Notification. Error : %v", err)
+	}
+}
 
 func newKafkaWriter(kafkaURL, topic string) *kafka.Writer {
 	return kafka.NewWriter(kafka.WriterConfig{
@@ -30,6 +65,8 @@ func getKafkaReader(kafkaURL, topic, groupID string) *kafka.Reader {
 }
 
 func main() {
+	prometheus.MustRegister(successBinary)
+
 	p1 := make(chan string)
 	c1 := make(chan string)
 
@@ -44,9 +81,14 @@ func main() {
 		log.Fatal("KAFKA_TOPIC has not been set.")
 		return
 	}
+	slackURL, err := os.LookupEnv("SLACK_URL")
+	if err != true {
+		log.Fatal("SLACK_URL has not been set.")
+		return
+	}
 
-	go consume(c1, kafkaURL, topic)
-	go produce(p1, kafkaURL, topic)
+	go consume(c1, kafkaURL, topic, slackURL)
+	go produce(p1, kafkaURL, topic, slackURL)
 
 	// Pull in messages from channels
 	pMsg := <-c1
@@ -54,15 +96,23 @@ func main() {
 
 	// Compare produced && consumed messages
 	if pMsg != cMsg {
-		log.Fatalln("Producer and consumer messages do not match.")
+		noMatch := "COMPARE: Producer and consumer messages do not match."
+		log.Fatalln(noMatch)
+		successBinary.Set(0)
+		raiseSlackNotification(noMatch, slackURL)
 	} else {
-		log.Println("Producer and consumer messages matched successfully.")
+		log.Println("COMPARE: Producer and consumer messages matched successfully.")
+		successBinary.Set(1)
 	}
 
-	log.Println("All done.")
+	// The Handler function provides a default handler to expose metrics
+	// via an HTTP server. "/metrics" is the usual endpoint for that.
+	log.Print("Serving /metrics endpoint.")
+	http.Handle("/metrics", promhttp.Handler())
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func produce(p1 chan<- string, kafkaURL string, topic string) {
+func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
 	// Configure writer
 	writer := newKafkaWriter(kafkaURL, topic)
 	// close writer upon exit
@@ -78,6 +128,7 @@ func produce(p1 chan<- string, kafkaURL string, topic string) {
 		err := writer.WriteMessages(context.Background(), msg)
 		if err != nil {
 			log.Fatalln("PRODUCER:", err)
+			raiseSlackNotification(fmt.Sprintln(err), slackURL)
 		} else {
 			log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
 			p1 <- string(msg.Value)
@@ -85,7 +136,7 @@ func produce(p1 chan<- string, kafkaURL string, topic string) {
 	}
 }
 
-func consume(c1 chan<- string, kafkaURL string, topic string) {
+func consume(c1 chan<- string, kafkaURL string, topic string, slackURL string) {
 	// Configure reader
 	reader := getKafkaReader(kafkaURL, topic, "healthcheck")
 	// Consume messages
@@ -94,6 +145,7 @@ func consume(c1 chan<- string, kafkaURL string, topic string) {
 		m, err := reader.ReadMessage(context.Background())
 		if err != nil {
 			log.Fatalln(err)
+			raiseSlackNotification(fmt.Sprintln(err), slackURL)
 		} else {
 			log.Printf("CONSUMER: Consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
 			defer reader.Close()
