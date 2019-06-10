@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	kafka "github.com/segmentio/kafka-go"
 )
 
@@ -47,9 +48,11 @@ func main() {
 	go consume(c1, kafkaURL, topic)
 	go produce(p1, kafkaURL, topic)
 
+	// Pull in messages from channels
 	pMsg := <-c1
 	cMsg := <-p1
 
+	// Compare produced && consumed messages
 	if pMsg != cMsg {
 		log.Fatalln("Producer and consumer messages do not match.")
 	} else {
@@ -60,15 +63,17 @@ func main() {
 }
 
 func produce(p1 chan<- string, kafkaURL string, topic string) {
+	// Configure writer
 	writer := newKafkaWriter(kafkaURL, topic)
 	// close writer upon exit
 	defer writer.Close()
 	log.Println("PRODUCER: Producing health check message ...")
 	for i := 0; i < 1; i++ {
+		uuid := fmt.Sprint(uuid.New())
 		dt := time.Now()
 		msg := kafka.Message{
-			Key:   []byte(fmt.Sprintf("Key-%d", i)),
-			Value: []byte(fmt.Sprintf(dt.Format("01-02-2006 15:04:05.00"))),
+			Key:   []byte(fmt.Sprintf("Key-%v", uuid)),
+			Value: []byte(fmt.Sprintf(dt.Format("01-02-2006::15:04:05.00"))),
 		}
 		err := writer.WriteMessages(context.Background(), msg)
 		if err != nil {
@@ -82,27 +87,10 @@ func produce(p1 chan<- string, kafkaURL string, topic string) {
 }
 
 func consume(c1 chan<- string, kafkaURL string, topic string) {
-	// Need to call this explicitly because of the for loop...
-	// Better way?
-	// defer wg.Done()
-	// Consume messages
-	log.Println("CONSUMER: Consuming health check message from LastOffset ...")
 	// Configure reader
-	rConf := kafka.ReaderConfig{
-		Brokers:   []string{kafkaURL},
-		Topic:     topic,
-		Partition: 0,
-		MinBytes:  10e3, // 10KB
-		MaxBytes:  10e8, // 1000MB
-	}
-	reader := kafka.NewReader(rConf)
-
-	err := reader.SetOffset(kafka.LastOffset)
-	if err != nil {
-		log.Fatalln(err)
-	} else {
-		log.Printf("CONSUMER: Successfully set offset to LastOffset")
-	}
+	reader := getKafkaReader(kafkaURL, topic, "healthcheck")
+	// Consume messages
+	log.Println("CONSUMER: Consuming health check message ...")
 	for {
 		m, err := reader.ReadMessage(context.Background())
 		if err != nil {
