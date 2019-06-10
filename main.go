@@ -79,8 +79,7 @@ func produce(p1 chan<- string, kafkaURL string, topic string) {
 		if err != nil {
 			log.Fatalln("PRODUCER:", err)
 		} else {
-			log.Println("PRODUCER: Key:", string(msg.Key))
-			log.Println("PRODUCER: Value:", string(msg.Value))
+			log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
 			p1 <- string(msg.Value)
 		}
 	}
@@ -96,7 +95,7 @@ func consume(c1 chan<- string, kafkaURL string, topic string) {
 		if err != nil {
 			log.Fatalln(err)
 		} else {
-			log.Printf("CONSUMER: consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
+			log.Printf("CONSUMER: Consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
 			defer reader.Close()
 			c1 <- string(m.Value)
 		}

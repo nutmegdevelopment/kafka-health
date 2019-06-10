@@ -9,6 +9,12 @@ This program:
 3) Consumes the message at the latest offset
 4) Compares the two messages
 
+## Build
+
+`GO111MODULE=ON go build`
+
+This will build the binary, pulling in all required modules as it goes. Pew pew. :cat2:
+
 ## Configuration
 
 Requires:
@@ -21,3 +27,7 @@ Requires:
 By default:
 
 * Single partition
+
+## To Do
+
+* Tests
