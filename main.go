@@ -17,10 +17,24 @@ import (
 )
 
 var (
-	successBinary = prometheus.NewGauge(
+	producerSuccess = prometheus.NewGauge(
 		prometheus.GaugeOpts{
-			Name: "kafka_health_check_success",
-			Help: "Last health check success or failure.",
+			Name: "kafka_health_check_producer_success",
+			Help: "Producer succeeded to produce message to Kafka.",
+		},
+	)
+
+	consumerSuccess = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "kafka_health_check_consumer_success",
+			Help: "Consumer succeeded to consumer message from Kafka.",
+		},
+	)
+
+	inSyncSuccess = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "kafka_health_check_in_sync",
+			Help: "Producer and consumer are in sync",
 		},
 	)
 )
@@ -64,13 +78,27 @@ func getKafkaReader(kafkaURL, topic, groupID string) *kafka.Reader {
 	})
 }
 
+func promMetrics() {
+	// Register custom metrics
+	prometheus.MustRegister(producerSuccess)
+	prometheus.MustRegister(consumerSuccess)
+	prometheus.MustRegister(inSyncSuccess)
+	// The Handler function provides a default handler to expose metrics
+	// via an HTTP server. "/metrics" is the usual endpoint for that.
+	log.Print("Serving /metrics endpoint.")
+	// Start HTTP server
+	http.Handle("/metrics", promhttp.Handler())
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
 func main() {
-	prometheus.MustRegister(successBinary)
+	// Prometheus bits
+	go promMetrics()
 
 	p1 := make(chan string)
 	c1 := make(chan string)
 
-	// get kafka writer using environment variables.
+	// Get Kafka config & Slack URL from env vars
 	kafkaURL, err := os.LookupEnv("KAFKA_URL")
 	if err != true {
 		log.Fatal("KAFKA_URL has not been set.")
@@ -87,29 +115,41 @@ func main() {
 		return
 	}
 
-	go consume(c1, kafkaURL, topic, slackURL)
-	go produce(p1, kafkaURL, topic, slackURL)
+	// Start produce / consume loop
+	for {
+		go consume(c1, kafkaURL, topic, slackURL)
+		go produce(p1, kafkaURL, topic, slackURL)
 
-	// Pull in messages from channels
-	pMsg := <-c1
-	cMsg := <-p1
+		// Pull in messages from channels
+		cMsg := <-c1
+		pMsg := <-p1
 
-	// Compare produced && consumed messages
-	if pMsg != cMsg {
-		noMatch := "COMPARE: Producer and consumer messages do not match."
-		log.Fatalln(noMatch)
-		successBinary.Set(0)
-		raiseSlackNotification(noMatch, slackURL)
-	} else {
-		log.Println("COMPARE: Producer and consumer messages matched successfully.")
-		successBinary.Set(1)
+		// Compare produced && consumed messages
+		if pMsg != cMsg {
+			noMatch := "COMPARE: Producer and consumer messages do not match."
+			log.Println(noMatch)
+			// Let Prometheus know we are not in sync
+			inSyncSuccess.Set(0)
+			// Try to catch up by comsuming again
+			log.Println("COMPARE: Launching another consumer to catch up ...")
+			go consume(c1, kafkaURL, topic, slackURL)
+			cMsg2 := <-c1
+			if pMsg != cMsg2 {
+				log.Println("COMPARE: Producer and consumer are out of sync.")
+				// Let Prometheus know we are not in sync
+				inSyncSuccess.Set(0)
+			} else {
+				log.Println("COMPARE: Resuming normal cycle ...")
+				// Let Prometheus know we are not in sync
+				inSyncSuccess.Set(1)
+			}
+		} else {
+			log.Println("COMPARE: Producer and consumer messages matched successfully.")
+			// Let Prometheus know we are not in sync
+			inSyncSuccess.Set(1)
+		}
+		time.Sleep(10 * time.Second)
 	}
-
-	// The Handler function provides a default handler to expose metrics
-	// via an HTTP server. "/metrics" is the usual endpoint for that.
-	log.Print("Serving /metrics endpoint.")
-	http.Handle("/metrics", promhttp.Handler())
-	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
 func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
@@ -118,6 +158,7 @@ func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
 	// close writer upon exit
 	defer writer.Close()
 	log.Println("PRODUCER: Producing health check message ...")
+	// Produce message
 	for i := 0; i < 1; i++ {
 		uuid := fmt.Sprint(uuid.New())
 		dt := time.Now()
@@ -127,10 +168,12 @@ func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
 		}
 		err := writer.WriteMessages(context.Background(), msg)
 		if err != nil {
-			log.Fatalln("PRODUCER:", err)
+			log.Println("PRODUCER:", err)
 			raiseSlackNotification(fmt.Sprintln(err), slackURL)
+			producerSuccess.Set(0)
 		} else {
 			log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
+			producerSuccess.Set(1)
 			p1 <- string(msg.Value)
 		}
 	}
@@ -139,17 +182,20 @@ func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
 func consume(c1 chan<- string, kafkaURL string, topic string, slackURL string) {
 	// Configure reader
 	reader := getKafkaReader(kafkaURL, topic, "healthcheck")
-	// Consume messages
 	log.Println("CONSUMER: Consuming health check message ...")
+	// Consume message
 	for {
 		m, err := reader.ReadMessage(context.Background())
 		if err != nil {
-			log.Fatalln(err)
+			log.Println("CONSUMER:", err)
 			raiseSlackNotification(fmt.Sprintln(err), slackURL)
+			consumerSuccess.Set(0)
+			defer reader.Close()
 		} else {
 			log.Printf("CONSUMER: Consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
-			defer reader.Close()
+			consumerSuccess.Set(1)
 			c1 <- string(m.Value)
+			defer reader.Close()
 		}
 	}
 }
