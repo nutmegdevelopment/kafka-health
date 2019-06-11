@@ -20,9 +20,8 @@ clean:
 run:
 	$(GOBUILD) -v
 	./$(BINARY_NAME)
-docker-build:
+docker:
 	docker build -t $(REGISTRY)$(BINARY_NAME):$(VERSION) .
-docker-push:
 	docker push $(REGISTRY)$(BINARY_NAME):$(VERSION)
 docker-run:
 	docker run --rm -t -e KAFKA_URL=${KAFKA_URL} -e KAFKA_TOPIC=${KAFKA_TOPIC} 
