@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -91,6 +92,10 @@ func promMetrics() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
+type Config struct {
+	URL string `json:"slackURL"`
+}
+
 func main() {
 	// Prometheus bits
 	go promMetrics()
@@ -98,22 +103,32 @@ func main() {
 	p1 := make(chan string)
 	c1 := make(chan string)
 
-	// Get Kafka config & Slack URL from env vars
-	kafkaURL, err := os.LookupEnv("KAFKA_URL")
-	if err != true {
+	// Get Kafka URL from env var
+	kafkaURL, error := os.LookupEnv("KAFKA_URL")
+	if error != true {
 		log.Fatal("KAFKA_URL has not been set.")
 		return
 	}
-	topic, err := os.LookupEnv("KAFKA_TOPIC")
-	if err != true {
+	// Get Kafka topic from env var
+	topic, error := os.LookupEnv("KAFKA_TOPIC")
+	if error != true {
 		log.Fatal("KAFKA_TOPIC has not been set.")
 		return
 	}
-	slackURL, err := os.LookupEnv("SLACK_URL")
-	if err != true {
-		log.Fatal("SLACK_URL has not been set.")
+	// Get config path for Slack URL from env var
+	configPath, error := os.LookupEnv("CONFIG_PATH")
+	if error != true {
+		log.Fatal("CONFIG_PATH has not been set.")
 		return
 	}
+	// Get Slack URL from file
+	file, err := ioutil.ReadFile(configPath)
+	if err != nil {
+		log.Fatalln("Cannot read Slack URL configuration file:", err)
+	}
+	data := Config{}
+	_ = json.Unmarshal([]byte(file), &data)
+	slackURL := data.URL
 
 	// Start produce / consume loop
 	for {
@@ -133,13 +148,13 @@ func main() {
 			// Try to catch up by comsuming again
 			log.Println("COMPARE: Launching another consumer to catch up ...")
 			go consume(c1, kafkaURL, topic, slackURL)
-			cMsg2 := <-c1
-			if pMsg != cMsg2 {
+			cMsg := <-c1
+			if pMsg != cMsg {
 				log.Println("COMPARE: Producer and consumer are out of sync.")
 				// Let Prometheus know we are not in sync
 				inSyncSuccess.Set(0)
 			} else {
-				log.Println("COMPARE: Resuming normal cycle ...")
+				log.Println("COMPARE: In sync: resuming normal cycle ...")
 				// Let Prometheus know we are not in sync
 				inSyncSuccess.Set(1)
 			}
