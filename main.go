@@ -40,13 +40,19 @@ var (
 	)
 )
 
+//Config is the struct that will be used to unmarshal the json config file
+//containing the Slack URL
+type Config struct {
+	URL string `json:"slackURL"`
+}
+
 //SlackMessage is the struct that we will post to Incoming Slack Webhook URL
 type SlackMessage struct {
 	Message string `json:"text"`
 }
 
-//raiseSlackNotification does a HTTP POST to the Incoming Webhook Integration in your Slack Team
-func raiseSlackNotification(errorMessage string, slackURL string) {
+//slackNotify does a HTTP POST to the Incoming Webhook Integration in your Slack Team
+func slackNotify(errorMessage string, slackURL string) {
 	postParams := SlackMessage{fmt.Sprintf("Kafka Health Check failed: %v", errorMessage)}
 
 	message, err := json.Marshal(postParams)
@@ -90,10 +96,6 @@ func promMetrics() {
 	// Start HTTP server
 	http.Handle("/metrics", promhttp.Handler())
 	log.Fatal(http.ListenAndServe(":8080", nil))
-}
-
-type Config struct {
-	URL string `json:"slackURL"`
 }
 
 func main() {
@@ -184,7 +186,7 @@ func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
 		err := writer.WriteMessages(context.Background(), msg)
 		if err != nil {
 			log.Println("PRODUCER:", err)
-			raiseSlackNotification(fmt.Sprintln(err), slackURL)
+			slackNotify(fmt.Sprintln(err), slackURL)
 			producerSuccess.Set(0)
 		} else {
 			log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
@@ -203,7 +205,7 @@ func consume(c1 chan<- string, kafkaURL string, topic string, slackURL string) {
 		m, err := reader.ReadMessage(context.Background())
 		if err != nil {
 			log.Println("CONSUMER:", err)
-			raiseSlackNotification(fmt.Sprintln(err), slackURL)
+			slackNotify(fmt.Sprintln(err), slackURL)
 			consumerSuccess.Set(0)
 			defer reader.Close()
 		} else {
