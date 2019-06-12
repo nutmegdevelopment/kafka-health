@@ -9,7 +9,7 @@ GOTEST=$(GOCMD) test
 BINARY_NAME=kafka-health
 REGISTRY="registry.nutmeg.co.uk:8443/"
 IMAGE_NAME=kafka-health
-VERSION=1.0.0
+VERSION=${RELEASE_NUMBER}
 
 build:
 	$(GOMODULE) CGO_ENABLED=0 GOOS=linux $(GOBUILD) -o $(BINARY_NAME) -v
