@@ -7,7 +7,7 @@ GOTEST=$(GOCMD) test
 
 # General parameters
 BINARY_NAME=kafka-health
-REGISTRY="registry.nutmeg.co.uk:8443/"
+REGISTRY=registry.nutmeg.co.uk:8443/
 IMAGE_NAME=kafka-health
 VERSION=${RELEASE_NUMBER}
 
