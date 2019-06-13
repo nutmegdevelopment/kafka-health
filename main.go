@@ -165,7 +165,7 @@ func main() {
 			// Let Prometheus know we are not in sync
 			inSyncSuccess.Set(1)
 		}
-		time.Sleep(10 * time.Second)
+		time.Sleep(1 * time.Minute)
 	}
 }
 
