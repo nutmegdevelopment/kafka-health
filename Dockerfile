@@ -12,7 +12,7 @@ RUN go mod download && \
     # Build the binary.
     CGO_ENABLED=0 GOOS=linux go build -o kafka-health -v
 
-FROM scratch
+FROM gcr.io/distroless/base
 
 # Copy our static executable.
 COPY --from=builder /app/kafka-health /app/kafka-health
