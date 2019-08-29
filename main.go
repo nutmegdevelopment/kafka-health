@@ -175,29 +175,27 @@ func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
 
 	log.Println("PRODUCER: Producing health check message ...")
 	// Produce message
-	for {
-		uuid := fmt.Sprint(uuid.New())
-		dt := time.Now()
-		msg := kafka.Message{
-			Key:   []byte(fmt.Sprintf("Key-%v", uuid)),
-			Value: []byte(fmt.Sprintf(dt.Format("01-02-2006::15:04:05.00"))),
-		}
-		err := writer.WriteMessages(context.Background(), msg)
-		if err != nil {
-			log.Println("PRODUCER:", err)
-			slackNotify(fmt.Sprintln(err), slackURL)
-			producerSuccess.Set(0)
+	uuid := fmt.Sprint(uuid.New())
+	dt := time.Now()
+	msg := kafka.Message{
+		Key:   []byte(fmt.Sprintf("Key-%v", uuid)),
+		Value: []byte(fmt.Sprintf(dt.Format("01-02-2006::15:04:05.00"))),
+	}
+	err := writer.WriteMessages(context.Background(), msg)
+	if err != nil {
+		log.Println("PRODUCER:", err)
+		slackNotify(fmt.Sprintln(err), slackURL)
+		producerSuccess.Set(0)
 
-			// close writer upon exit
-			writer.Close()
-		} else {
-			log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
-			producerSuccess.Set(1)
-			p1 <- string(msg.Value)
+		// close writer upon exit
+		writer.Close()
+	} else {
+		log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
+		producerSuccess.Set(1)
+		p1 <- string(msg.Value)
 
-			// close writer upon exit
-			writer.Close()
-		}
+		// close writer upon exit
+		writer.Close()
 	}
 }
 
@@ -206,18 +204,16 @@ func consume(c1 chan<- string, kafkaURL string, topic string, slackURL string) {
 	reader := getKafkaReader(kafkaURL, topic, "healthcheck")
 	log.Println("CONSUMER: Consuming health check message ...")
 	// Consume message
-	for {
-		m, err := reader.ReadMessage(context.Background())
-		if err != nil {
-			log.Println("CONSUMER:", err)
-			slackNotify(fmt.Sprintln(err), slackURL)
-			consumerSuccess.Set(0)
-			reader.Close()
-		} else {
-			log.Printf("CONSUMER: Consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
-			consumerSuccess.Set(1)
-			c1 <- string(m.Value)
-			reader.Close()
-		}
+	m, err := reader.ReadMessage(context.Background())
+	if err != nil {
+		log.Println("CONSUMER:", err)
+		slackNotify(fmt.Sprintln(err), slackURL)
+		consumerSuccess.Set(0)
+		reader.Close()
+	} else {
+		log.Printf("CONSUMER: Consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
+		consumerSuccess.Set(1)
+		c1 <- string(m.Value)
+		reader.Close()
 	}
 }
