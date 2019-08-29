@@ -172,11 +172,10 @@ func main() {
 func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
 	// Configure writer
 	writer := newKafkaWriter(kafkaURL, topic)
-	// close writer upon exit
-	defer writer.Close()
+
 	log.Println("PRODUCER: Producing health check message ...")
 	// Produce message
-	for i := 0; i < 1; i++ {
+	for {
 		uuid := fmt.Sprint(uuid.New())
 		dt := time.Now()
 		msg := kafka.Message{
@@ -188,10 +187,16 @@ func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
 			log.Println("PRODUCER:", err)
 			slackNotify(fmt.Sprintln(err), slackURL)
 			producerSuccess.Set(0)
+
+			// close writer upon exit
+			writer.Close()
 		} else {
 			log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
 			producerSuccess.Set(1)
 			p1 <- string(msg.Value)
+
+			// close writer upon exit
+			writer.Close()
 		}
 	}
 }
@@ -207,12 +212,12 @@ func consume(c1 chan<- string, kafkaURL string, topic string, slackURL string) {
 			log.Println("CONSUMER:", err)
 			slackNotify(fmt.Sprintln(err), slackURL)
 			consumerSuccess.Set(0)
-			defer reader.Close()
+			reader.Close()
 		} else {
 			log.Printf("CONSUMER: Consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
 			consumerSuccess.Set(1)
 			c1 <- string(m.Value)
-			defer reader.Close()
+			reader.Close()
 		}
 	}
 }
