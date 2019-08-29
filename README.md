@@ -31,3 +31,4 @@ By default:
 ## To Do
 
 * Tests
+* Backoff on Slack notifications
