@@ -5,3 +5,5 @@ require (
 	github.com/prometheus/client_golang v0.9.4
 	github.com/segmentio/kafka-go v0.2.4
 )
+
+go 1.13

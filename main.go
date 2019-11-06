@@ -64,6 +64,7 @@ func slackNotify(errorMessage string, slackURL string) {
 	_, err = http.PostForm(slackURL, v)
 	if err != nil {
 		log.Printf("Error in sending Slack Notification. Error : %v", err)
+		return
 	}
 }
 
@@ -170,6 +171,8 @@ func main() {
 }
 
 func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
+	var backoffSec int
+
 	// Configure writer
 	writer := newKafkaWriter(kafkaURL, topic)
 
@@ -184,22 +187,29 @@ func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
 	err := writer.WriteMessages(context.Background(), msg)
 	if err != nil {
 		log.Println("PRODUCER:", err)
-		slackNotify(fmt.Sprintln(err), slackURL)
-		producerSuccess.Set(0)
 
+		time.Sleep(time.Duration(backoffSec) * time.Millisecond)
+		backoffSec++
+		slackNotify(fmt.Sprintln(err), slackURL)
+
+		producerSuccess.Set(0)
 		// close writer upon exit
 		writer.Close()
 	} else {
 		log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
-		producerSuccess.Set(1)
-		p1 <- string(msg.Value)
 
+		backoffSec = 0
+
+		producerSuccess.Set(1)
 		// close writer upon exit
 		writer.Close()
+		p1 <- string(msg.Value)
 	}
 }
 
 func consume(c1 chan<- string, kafkaURL string, topic string, slackURL string) {
+	var backoffSec int
+
 	// Configure reader
 	reader := getKafkaReader(kafkaURL, topic, "healthcheck")
 	log.Println("CONSUMER: Consuming health check message ...")
@@ -207,13 +217,21 @@ func consume(c1 chan<- string, kafkaURL string, topic string, slackURL string) {
 	m, err := reader.ReadMessage(context.Background())
 	if err != nil {
 		log.Println("CONSUMER:", err)
+
+		time.Sleep(time.Duration(backoffSec) * time.Millisecond)
+		backoffSec++
 		slackNotify(fmt.Sprintln(err), slackURL)
+
 		consumerSuccess.Set(0)
 		reader.Close()
 	} else {
 		log.Printf("CONSUMER: Consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
+
+		backoffSec = 0
+
 		consumerSuccess.Set(1)
-		c1 <- string(m.Value)
+		// close reader upon exit
 		reader.Close()
+		c1 <- string(m.Value)
 	}
 }
