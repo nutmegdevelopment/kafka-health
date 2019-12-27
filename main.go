@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/cenkalti/backoff"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -78,11 +79,13 @@ func newKafkaWriter(kafkaURL, topic string) *kafka.Writer {
 
 func getKafkaReader(kafkaURL, topic, groupID string) *kafka.Reader {
 	return kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  []string{kafkaURL},
-		GroupID:  groupID,
-		Topic:    topic,
-		MinBytes: 10e3, // 10KB
-		MaxBytes: 10e6, // 10MB
+		Brokers:     []string{kafkaURL},
+		GroupID:     groupID,
+		Topic:       topic,
+		MaxWait:     5 * time.Second,
+		MaxAttempts: 1,
+		MinBytes:    10e3, // 10KB
+		MaxBytes:    10e6, // 10MB
 	})
 }
 
@@ -102,9 +105,6 @@ func promMetrics() {
 func main() {
 	// Prometheus bits
 	go promMetrics()
-
-	p1 := make(chan string)
-	c1 := make(chan string)
 
 	// Get Kafka URL from env var
 	kafkaURL, error := os.LookupEnv("KAFKA_URL")
@@ -133,14 +133,26 @@ func main() {
 	_ = json.Unmarshal([]byte(file), &data)
 	slackURL := data.URL
 
-	// Start produce / consume loop
-	for {
-		go consume(c1, kafkaURL, topic, slackURL)
-		go produce(p1, kafkaURL, topic, slackURL)
+	loop(kafkaURL, topic, slackURL)
+}
 
-		// Pull in messages from channels
-		cMsg := <-c1
-		pMsg := <-p1
+func loop(kafkaURL string, topic string, slackURL string) {
+	ticker := time.NewTicker(1 * time.Minute)
+
+	for range ticker.C {
+		pMsg, pSuccess := produce(kafkaURL, topic, slackURL)
+		if pSuccess != true {
+			log.Print("CONSUMER: Caught you!")
+			backoffLoop(kafkaURL, topic, slackURL)
+			break
+		}
+
+		cMsg, cSuccess := consume(kafkaURL, topic, slackURL)
+		if cSuccess != true {
+			log.Print("CONSUMER: Caught you!")
+			backoffLoop(kafkaURL, topic, slackURL)
+			break
+		}
 
 		// Compare produced && consumed messages
 		if pMsg != cMsg {
@@ -150,8 +162,13 @@ func main() {
 			inSyncSuccess.Set(0)
 			// Try to catch up by comsuming again
 			log.Println("COMPARE: Launching another consumer to catch up ...")
-			go consume(c1, kafkaURL, topic, slackURL)
-			cMsg := <-c1
+			cMsg, cSuccess := consume(kafkaURL, topic, slackURL)
+			if cSuccess != true {
+				log.Print("CONSUMER: Caught you!")
+				backoffLoop(kafkaURL, topic, slackURL)
+				break
+			}
+
 			if pMsg != cMsg {
 				log.Println("COMPARE: Producer and consumer are out of sync.")
 				// Let Prometheus know we are not in sync
@@ -166,15 +183,77 @@ func main() {
 			// Let Prometheus know we are not in sync
 			inSyncSuccess.Set(1)
 		}
-		time.Sleep(1 * time.Minute)
 	}
 }
 
-func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
-	var backoffSec int
+func backoffLoop(kafkaURL string, topic string, slackURL string) {
+	// We can use a ticker to get the current replica count
+	// every x amount of time, with an exponential backoff
+	exponentialBackOff := &backoff.ExponentialBackOff{
+		InitialInterval:     1 * time.Minute,
+		RandomizationFactor: 0.2,
+		Multiplier:          1.5,
+		MaxInterval:         12 * time.Hour,
+		MaxElapsedTime:      48 * time.Hour,
+		Clock:               backoff.SystemClock,
+	}
 
+	// Create the ticker
+	ticker := backoff.NewTicker(exponentialBackOff)
+
+	for range ticker.C {
+		log.Print("BACKOFF...\n")
+		_, pSuccess := produce(kafkaURL, topic, slackURL)
+		if pSuccess != true {
+			log.Print("PRODUCER: Caught you!")
+			continue
+		}
+
+		_, cSuccess := consume(kafkaURL, topic, slackURL)
+		if cSuccess != true {
+			log.Print("CONSUMER: Caught you!")
+			continue
+		}
+
+		// // Compare produced && consumed messages
+		// if pMsg != cMsg {
+		// 	noMatch := "COMPARE: Producer and consumer messages do not match."
+		// 	log.Println(noMatch)
+		// 	// Let Prometheus know we are not in sync
+		// 	inSyncSuccess.Set(0)
+		// 	// Try to catch up by comsuming again
+		// 	log.Println("COMPARE: Launching another consumer to catch up ...")
+		// 	cMsg, cSuccess := consume(kafkaURL, topic, slackURL)
+		// 	if cSuccess != true {
+		// 		log.Print("CONSUMER: Caught you!")
+		// 		continue
+		// 	}
+
+		// 	if pMsg != cMsg {
+		// 		log.Println("COMPARE: Producer and consumer are out of sync.")
+		// 		// Let Prometheus know we are not in sync
+		// 		inSyncSuccess.Set(0)
+		// 	} else {
+		// 		log.Println("COMPARE: In sync: resuming normal cycle ...")
+		// 		// Let Prometheus know we are not in sync
+		// 		inSyncSuccess.Set(1)
+		// 	}
+		// } else {
+		// log.Println("COMPARE: Producer and consumer messages matched successfully.")
+		// // Let Prometheus know we are not in sync
+		// inSyncSuccess.Set(1)
+
+		// Return to normal loop
+		// }
+		break
+	}
+	loop(kafkaURL, topic, slackURL)
+}
+
+func produce(kafkaURL string, topic string, slackURL string) (string, bool) {
 	// Configure writer
 	writer := newKafkaWriter(kafkaURL, topic)
+	defer writer.Close()
 
 	log.Println("PRODUCER: Producing health check message ...")
 	// Produce message
@@ -188,50 +267,41 @@ func produce(p1 chan<- string, kafkaURL string, topic string, slackURL string) {
 	if err != nil {
 		log.Println("PRODUCER:", err)
 
-		time.Sleep(time.Duration(backoffSec) * time.Millisecond)
-		backoffSec++
 		slackNotify(fmt.Sprintln(err), slackURL)
 
 		producerSuccess.Set(0)
-		// close writer upon exit
-		writer.Close()
+
+		return fmt.Sprint(err), false
 	} else {
 		log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
 
-		backoffSec = 0
-
 		producerSuccess.Set(1)
-		// close writer upon exit
-		writer.Close()
-		p1 <- string(msg.Value)
+
+		return string(msg.Value), true
 	}
 }
 
-func consume(c1 chan<- string, kafkaURL string, topic string, slackURL string) {
-	var backoffSec int
-
+func consume(kafkaURL string, topic string, slackURL string) (string, bool) {
 	// Configure reader
-	reader := getKafkaReader(kafkaURL, topic, "healthcheck")
+	reader := getKafkaReader(kafkaURL, topic, "healthcheck1")
+	defer reader.Close()
+
 	log.Println("CONSUMER: Consuming health check message ...")
 	// Consume message
 	m, err := reader.ReadMessage(context.Background())
 	if err != nil {
 		log.Println("CONSUMER:", err)
 
-		time.Sleep(time.Duration(backoffSec) * time.Millisecond)
-		backoffSec++
 		slackNotify(fmt.Sprintln(err), slackURL)
 
 		consumerSuccess.Set(0)
-		reader.Close()
+
+		return fmt.Sprint(err), false
 	} else {
 		log.Printf("CONSUMER: Consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
 
-		backoffSec = 0
-
 		consumerSuccess.Set(1)
-		// close reader upon exit
-		reader.Close()
-		c1 <- string(m.Value)
+
+		return fmt.Sprint(m.Value), true
 	}
 }
