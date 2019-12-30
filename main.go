@@ -82,7 +82,7 @@ func promMetrics() {
 	prometheus.MustRegister(consumerCxSuccess)
 	// The Handler function provides a default handler to expose metrics
 	// via an HTTP server. "/metrics" is the usual endpoint for that.
-	log.Print("Serving /metrics endpoint.")
+	log.Println("Serving /metrics endpoint.")
 	// Start HTTP server
 	http.Handle("/metrics", promhttp.Handler())
 	log.Fatal(http.ListenAndServe(":8080", nil))
@@ -114,13 +114,13 @@ func loop(kafkaURL string, topic string) {
 	for range ticker.C {
 		pMsg, pSuccess := produce(kafkaURL, topic)
 		if pSuccess != true {
-			log.Print("PRODUCER: There was an error producing to the Kafka cluster!")
+			log.Println("PRODUCER: There was an error producing to the Kafka cluster!")
 			break
 		}
 
 		cMsg, cSuccess := consume(kafkaURL, topic)
 		if cSuccess != true {
-			log.Print("CONSUMER: There was an error consuming from the Kafka cluster!")
+			log.Println("CONSUMER: There was an error consuming from the Kafka cluster!")
 			break
 		}
 
@@ -152,13 +152,13 @@ func backoffLoop(kafkaURL string, topic string) {
 
 		pMsg, pSuccess := produce(kafkaURL, topic)
 		if pSuccess != true {
-			log.Print("PRODUCER: There was an error producing to the Kafka cluster!")
+			log.Println("PRODUCER: There was an error producing to the Kafka cluster!")
 			continue
 		}
 
 		cMsg, cSuccess := consume(kafkaURL, topic)
 		if cSuccess != true {
-			log.Print("CONSUMER: There was an error consuming from the Kafka cluster!")
+			log.Println("CONSUMER: There was an error consuming from the Kafka cluster!")
 			continue
 		}
 
@@ -175,10 +175,6 @@ func backoffLoop(kafkaURL string, topic string) {
 
 func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 	// Compare produced && consumed messages
-	log.Print(pMsg)
-
-	log.Print(cMsg)
-
 	if pMsg != cMsg {
 		noMatch := "COMPARE: Producer and consumer messages do not match."
 		log.Println(noMatch)
@@ -188,7 +184,7 @@ func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 		log.Println("COMPARE: Launching another consumer to catch up ...")
 		cMsg, cSuccess := consume(kafkaURL, topic)
 		if cSuccess != true {
-			log.Print("COMPARE[230] CONSUMER: Caught you!")
+			log.Println("CONSUMER: There was an error consuming from the Kafka cluster!")
 			return false
 		}
 
@@ -199,7 +195,6 @@ func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 			return false
 		}
 
-		log.Println("COMPARE: ")
 		log.Println("COMPARE: In sync: Producer and consumer messages matched successfully.\n  Resuming normal cycle ...")
 	}
 
