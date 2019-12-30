@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff"
@@ -39,35 +37,21 @@ var (
 			Help: "Producer and consumer are in sync",
 		},
 	)
+
+	producerCxSuccess = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "kafka_health_check_producer_cx_success",
+			Help: "Producer succeeded in connecting to the Kafka cluster",
+		},
+	)
+
+	consumerCxSuccess = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "kafka_health_check_consumer_cx_success",
+			Help: "Consumer succeeded in connecting to the Kafka cluster",
+		},
+	)
 )
-
-//Config is the struct that will be used to unmarshal the json config file
-//containing the Slack URL
-type Config struct {
-	URL string `json:"slackURL"`
-}
-
-//SlackMessage is the struct that we will post to Incoming Slack Webhook URL
-type SlackMessage struct {
-	Message string `json:"text"`
-}
-
-//slackNotify does a HTTP POST to the Incoming Webhook Integration in your Slack Team
-func slackNotify(errorMessage string, slackURL string) {
-	postParams := SlackMessage{fmt.Sprintf("Kafka Health Check failed: %v", errorMessage)}
-
-	message, err := json.Marshal(postParams)
-	if err != nil {
-		log.Printf("Error in creating POST Message. Error : %v", err)
-		return
-	}
-	v := url.Values{"payload": {string(message)}}
-	_, err = http.PostForm(slackURL, v)
-	if err != nil {
-		log.Printf("Error in sending Slack Notification. Error : %v", err)
-		return
-	}
-}
 
 func newKafkaWriter(kafkaURL, topic string) *kafka.Writer {
 	return kafka.NewWriter(kafka.WriterConfig{
@@ -94,6 +78,8 @@ func promMetrics() {
 	prometheus.MustRegister(producerSuccess)
 	prometheus.MustRegister(consumerSuccess)
 	prometheus.MustRegister(inSyncSuccess)
+	prometheus.MustRegister(producerCxSuccess)
+	prometheus.MustRegister(consumerCxSuccess)
 	// The Handler function provides a default handler to expose metrics
 	// via an HTTP server. "/metrics" is the usual endpoint for that.
 	log.Print("Serving /metrics endpoint.")
@@ -118,75 +104,35 @@ func main() {
 		log.Fatal("KAFKA_TOPIC has not been set.")
 		return
 	}
-	// Get config path for Slack URL from env var
-	configPath, error := os.LookupEnv("CONFIG_PATH")
-	if error != true {
-		log.Fatal("CONFIG_PATH has not been set.")
-		return
-	}
-	// Get Slack URL from file
-	file, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		log.Fatalln("Cannot read Slack URL configuration file:", err)
-	}
-	data := Config{}
-	_ = json.Unmarshal([]byte(file), &data)
-	slackURL := data.URL
 
-	loop(kafkaURL, topic, slackURL)
+	loop(kafkaURL, topic)
 }
 
-func loop(kafkaURL string, topic string, slackURL string) {
+func loop(kafkaURL string, topic string) {
 	ticker := time.NewTicker(1 * time.Minute)
 
 	for range ticker.C {
-		pMsg, pSuccess := produce(kafkaURL, topic, slackURL)
+		pMsg, pSuccess := produce(kafkaURL, topic)
 		if pSuccess != true {
-			log.Print("CONSUMER: Caught you!")
-			backoffLoop(kafkaURL, topic, slackURL)
+			log.Print("PRODUCER: There was an error producing to the Kafka cluster!")
 			break
 		}
 
-		cMsg, cSuccess := consume(kafkaURL, topic, slackURL)
+		cMsg, cSuccess := consume(kafkaURL, topic)
 		if cSuccess != true {
-			log.Print("CONSUMER: Caught you!")
-			backoffLoop(kafkaURL, topic, slackURL)
+			log.Print("CONSUMER: There was an error consuming from the Kafka cluster!")
 			break
 		}
 
-		// Compare produced && consumed messages
-		if pMsg != cMsg {
-			noMatch := "COMPARE: Producer and consumer messages do not match."
-			log.Println(noMatch)
-			// Let Prometheus know we are not in sync
-			inSyncSuccess.Set(0)
-			// Try to catch up by comsuming again
-			log.Println("COMPARE: Launching another consumer to catch up ...")
-			cMsg, cSuccess := consume(kafkaURL, topic, slackURL)
-			if cSuccess != true {
-				log.Print("CONSUMER: Caught you!")
-				backoffLoop(kafkaURL, topic, slackURL)
-				break
-			}
-
-			if pMsg != cMsg {
-				log.Println("COMPARE: Producer and consumer are out of sync.")
-				// Let Prometheus know we are not in sync
-				inSyncSuccess.Set(0)
-			} else {
-				log.Println("COMPARE: In sync: resuming normal cycle ...")
-				// Let Prometheus know we are not in sync
-				inSyncSuccess.Set(1)
-			}
-		} else {
-			log.Println("COMPARE: Producer and consumer messages matched successfully.")
-			// Let Prometheus know we are not in sync
-			inSyncSuccess.Set(1)
+		compareResult := compare(pMsg, cMsg, kafkaURL, topic)
+		if compareResult != true {
+			continue
 		}
 	}
+	backoffLoop(kafkaURL, topic)
 }
 
-func backoffLoop(kafkaURL string, topic string, slackURL string) {
+func backoffLoop(kafkaURL string, topic string) {
 	// We can use a ticker to get the current replica count
 	// every x amount of time, with an exponential backoff
 	exponentialBackOff := &backoff.ExponentialBackOff{
@@ -202,55 +148,67 @@ func backoffLoop(kafkaURL string, topic string, slackURL string) {
 	ticker := backoff.NewTicker(exponentialBackOff)
 
 	for range ticker.C {
-		log.Print("BACKOFF...\n")
-		_, pSuccess := produce(kafkaURL, topic, slackURL)
+		log.Println("Entering backoff...")
+
+		pMsg, pSuccess := produce(kafkaURL, topic)
 		if pSuccess != true {
-			log.Print("PRODUCER: Caught you!")
+			log.Print("PRODUCER: There was an error producing to the Kafka cluster!")
 			continue
 		}
 
-		_, cSuccess := consume(kafkaURL, topic, slackURL)
+		cMsg, cSuccess := consume(kafkaURL, topic)
 		if cSuccess != true {
-			log.Print("CONSUMER: Caught you!")
+			log.Print("CONSUMER: There was an error consuming from the Kafka cluster!")
 			continue
 		}
 
-		// // Compare produced && consumed messages
-		// if pMsg != cMsg {
-		// 	noMatch := "COMPARE: Producer and consumer messages do not match."
-		// 	log.Println(noMatch)
-		// 	// Let Prometheus know we are not in sync
-		// 	inSyncSuccess.Set(0)
-		// 	// Try to catch up by comsuming again
-		// 	log.Println("COMPARE: Launching another consumer to catch up ...")
-		// 	cMsg, cSuccess := consume(kafkaURL, topic, slackURL)
-		// 	if cSuccess != true {
-		// 		log.Print("CONSUMER: Caught you!")
-		// 		continue
-		// 	}
+		compareResult := compare(pMsg, cMsg, kafkaURL, topic)
+		if compareResult != true {
+			continue
+		}
 
-		// 	if pMsg != cMsg {
-		// 		log.Println("COMPARE: Producer and consumer are out of sync.")
-		// 		// Let Prometheus know we are not in sync
-		// 		inSyncSuccess.Set(0)
-		// 	} else {
-		// 		log.Println("COMPARE: In sync: resuming normal cycle ...")
-		// 		// Let Prometheus know we are not in sync
-		// 		inSyncSuccess.Set(1)
-		// 	}
-		// } else {
-		// log.Println("COMPARE: Producer and consumer messages matched successfully.")
-		// // Let Prometheus know we are not in sync
-		// inSyncSuccess.Set(1)
-
-		// Return to normal loop
-		// }
 		break
 	}
-	loop(kafkaURL, topic, slackURL)
+	log.Println("Exiting backoff...")
+	loop(kafkaURL, topic)
 }
 
-func produce(kafkaURL string, topic string, slackURL string) (string, bool) {
+func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
+	// Compare produced && consumed messages
+	log.Print(pMsg)
+
+	log.Print(cMsg)
+
+	if pMsg != cMsg {
+		noMatch := "COMPARE: Producer and consumer messages do not match."
+		log.Println(noMatch)
+		// Let Prometheus know we are not in sync
+		inSyncSuccess.Set(0)
+		// Try to catch up by comsuming again
+		log.Println("COMPARE: Launching another consumer to catch up ...")
+		cMsg, cSuccess := consume(kafkaURL, topic)
+		if cSuccess != true {
+			log.Print("COMPARE[230] CONSUMER: Caught you!")
+			return false
+		}
+
+		if pMsg != cMsg {
+			log.Println("COMPARE: Producer and consumer are out of sync.")
+			// Let Prometheus know we are not in sync
+			inSyncSuccess.Set(0)
+			return false
+		}
+
+		log.Println("COMPARE: ")
+		log.Println("COMPARE: In sync: Producer and consumer messages matched successfully.\n  Resuming normal cycle ...")
+	}
+
+	// Let Prometheus know we are in sync
+	inSyncSuccess.Set(1)
+	return true
+}
+
+func produce(kafkaURL string, topic string) (string, bool) {
 	// Configure writer
 	writer := newKafkaWriter(kafkaURL, topic)
 	defer writer.Close()
@@ -267,21 +225,31 @@ func produce(kafkaURL string, topic string, slackURL string) (string, bool) {
 	if err != nil {
 		log.Println("PRODUCER:", err)
 
-		slackNotify(fmt.Sprintln(err), slackURL)
-
 		producerSuccess.Set(0)
 
+		pCxError := strings.Contains(fmt.Sprint(err), "dial tcp")
+		if pCxError == true {
+			producerSuccess.Set(0)
+			producerCxSuccess.Set(0)
+
+			return fmt.Sprint(err), false
+		}
+
+		producerSuccess.Set(0)
+		producerCxSuccess.Set(1)
+
 		return fmt.Sprint(err), false
-	} else {
-		log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
-
-		producerSuccess.Set(1)
-
-		return string(msg.Value), true
 	}
+
+	log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
+
+	producerSuccess.Set(1)
+	producerCxSuccess.Set(1)
+
+	return string(msg.Value), true
 }
 
-func consume(kafkaURL string, topic string, slackURL string) (string, bool) {
+func consume(kafkaURL string, topic string) (string, bool) {
 	// Configure reader
 	reader := getKafkaReader(kafkaURL, topic, "healthcheck1")
 	defer reader.Close()
@@ -292,16 +260,23 @@ func consume(kafkaURL string, topic string, slackURL string) (string, bool) {
 	if err != nil {
 		log.Println("CONSUMER:", err)
 
-		slackNotify(fmt.Sprintln(err), slackURL)
+		cCxError := strings.Contains(fmt.Sprint(err), "dial tcp")
+		if cCxError == true {
+			consumerSuccess.Set(0)
+			consumerCxSuccess.Set(0)
+			return fmt.Sprint(err), false
+		}
 
 		consumerSuccess.Set(0)
+		consumerCxSuccess.Set(1)
 
 		return fmt.Sprint(err), false
-	} else {
-		log.Printf("CONSUMER: Consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
-
-		consumerSuccess.Set(1)
-
-		return fmt.Sprint(m.Value), true
 	}
+
+	log.Printf("CONSUMER: Consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
+
+	consumerSuccess.Set(1)
+	consumerCxSuccess.Set(1)
+
+	return string(m.Value), true
 }
