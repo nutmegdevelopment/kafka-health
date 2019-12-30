@@ -169,6 +169,7 @@ func backoffLoop(kafkaURL string, topic string) {
 
 		break
 	}
+
 	log.Println("Exiting backoff...")
 	loop(kafkaURL, topic)
 }
@@ -182,10 +183,25 @@ func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 		inSyncSuccess.Set(0)
 		// Try to catch up by comsuming again
 		log.Println("COMPARE: Launching another consumer to catch up ...")
-		cMsg, cSuccess := consume(kafkaURL, topic)
-		if cSuccess != true {
-			log.Println("CONSUMER: There was an error consuming from the Kafka cluster!")
-			return false
+
+		c1 := make(chan string, 1)
+
+		// compare function in its own goroutine and pass back its
+		// response into channel c1
+		go func() {
+			cMsg, cSuccess := consume(kafkaURL, topic)
+			if cSuccess != true {
+				log.Println("CONSUMER: There was an error consuming from the Kafka cluster!")
+			}
+			c1 <- cMsg
+		}()
+
+		// Listen on our channel AND a timeout channel - which ever happens first.
+		select {
+		case res := <-c1:
+			fmt.Println(res)
+		case <-time.After(10 * time.Second):
+			fmt.Println("CONSUMER: Forced timeout after 10 seconds")
 		}
 
 		if pMsg != cMsg {
