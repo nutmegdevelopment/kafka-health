@@ -17,38 +17,73 @@ import (
 )
 
 var (
-	producerSuccess = prometheus.NewGauge(
-		prometheus.GaugeOpts{
+	producerSuccess = prometheus.NewCounter(
+		prometheus.CounterOpts{
 			Name: "kafka_health_check_producer_success",
 			Help: "Producer succeeded to produce message to Kafka.",
 		},
 	)
 
-	consumerSuccess = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "kafka_health_check_consumer_success",
-			Help: "Consumer succeeded to consumer message from Kafka.",
+	producerFailure = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kafka_health_check_producer_failure",
+			Help: "Producer failed to produce message to Kafka.",
 		},
 	)
 
-	inSyncSuccess = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "kafka_health_check_in_sync",
+	consumerSuccess = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kafka_health_check_consumer_success",
+			Help: "Consumer succeeded to produce message to Kafka.",
+		},
+	)
+
+	consumerFailure = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kafka_health_check_consumer_failure",
+			Help: "Consumer failed to produce message to Kafka.",
+		},
+	)
+
+	inSyncSuccess = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kafka_health_check_in_sync_success",
 			Help: "Producer and consumer are in sync",
 		},
 	)
 
-	producerCxSuccess = prometheus.NewGauge(
-		prometheus.GaugeOpts{
+	inSyncFailure = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kafka_health_check_in_sync_failure",
+			Help: "Producer and consumer are NOT in sync",
+		},
+	)
+
+	producerCxSuccess = prometheus.NewCounter(
+		prometheus.CounterOpts{
 			Name: "kafka_health_check_producer_cx_success",
 			Help: "Producer succeeded in connecting to the Kafka cluster",
 		},
 	)
 
-	consumerCxSuccess = prometheus.NewGauge(
-		prometheus.GaugeOpts{
+	producerCxFailure = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kafka_health_check_producer_cx_failure",
+			Help: "Producer failed in connecting to the Kafka cluster",
+		},
+	)
+
+	consumerCxSuccess = prometheus.NewCounter(
+		prometheus.CounterOpts{
 			Name: "kafka_health_check_consumer_cx_success",
 			Help: "Consumer succeeded in connecting to the Kafka cluster",
+		},
+	)
+
+	consumerCxFailure = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kafka_health_check_consumer_cx_failure",
+			Help: "Consumer failed in connecting to the Kafka cluster",
 		},
 	)
 )
@@ -76,10 +111,15 @@ func getKafkaReader(kafkaURL, topic, groupID string) *kafka.Reader {
 func promMetrics() {
 	// Register custom metrics
 	prometheus.MustRegister(producerSuccess)
+	prometheus.MustRegister(producerFailure)
 	prometheus.MustRegister(consumerSuccess)
+	prometheus.MustRegister(consumerFailure)
 	prometheus.MustRegister(inSyncSuccess)
+	prometheus.MustRegister(inSyncFailure)
 	prometheus.MustRegister(producerCxSuccess)
+	prometheus.MustRegister(producerCxFailure)
 	prometheus.MustRegister(consumerCxSuccess)
+	prometheus.MustRegister(consumerCxFailure)
 	// The Handler function provides a default handler to expose metrics
 	// via an HTTP server. "/metrics" is the usual endpoint for that.
 	log.Println("Serving /metrics endpoint.")
@@ -180,7 +220,7 @@ func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 		noMatch := "COMPARE: Producer and consumer messages do not match."
 		log.Println(noMatch)
 		// Let Prometheus know we are not in sync
-		inSyncSuccess.Set(0)
+		inSyncFailure.Add(1)
 		// Try to catch up by comsuming again
 		log.Println("COMPARE: Launching another consumer to catch up ...")
 
@@ -207,7 +247,7 @@ func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 		if pMsg != cMsg {
 			log.Println("COMPARE: Producer and consumer are out of sync.")
 			// Let Prometheus know we are not in sync
-			inSyncSuccess.Set(0)
+			inSyncFailure.Add(1)
 			return false
 		}
 
@@ -215,7 +255,7 @@ func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 	}
 
 	// Let Prometheus know we are in sync
-	inSyncSuccess.Set(1)
+	inSyncSuccess.Add(1)
 	return true
 }
 
@@ -236,33 +276,33 @@ func produce(kafkaURL string, topic string) (string, bool) {
 	if err != nil {
 		log.Println("PRODUCER:", err)
 
-		producerSuccess.Set(0)
+		producerFailure.Add(1)
 
 		pCxError := strings.Contains(fmt.Sprint(err), "dial tcp")
 		if pCxError == true {
-			producerSuccess.Set(0)
-			producerCxSuccess.Set(0)
+			producerFailure.Add(1)
+			producerCxFailure.Add(1)
 
 			return fmt.Sprint(err), false
 		}
 
-		producerSuccess.Set(0)
-		producerCxSuccess.Set(1)
+		producerFailure.Add(1)
+		producerCxSuccess.Add(1)
 
 		return fmt.Sprint(err), false
 	}
 
 	log.Println("PRODUCER: Key:", string(msg.Key), "Value:", string(msg.Value))
 
-	producerSuccess.Set(1)
-	producerCxSuccess.Set(1)
+	producerSuccess.Add(1)
+	producerCxSuccess.Add(1)
 
 	return string(msg.Value), true
 }
 
 func consume(kafkaURL string, topic string) (string, bool) {
 	// Configure reader
-	reader := getKafkaReader(kafkaURL, topic, "healthcheck1")
+	reader := getKafkaReader(kafkaURL, topic, "healthcheck")
 	defer reader.Close()
 
 	log.Println("CONSUMER: Consuming health check message ...")
@@ -273,21 +313,21 @@ func consume(kafkaURL string, topic string) (string, bool) {
 
 		cCxError := strings.Contains(fmt.Sprint(err), "dial tcp")
 		if cCxError == true {
-			consumerSuccess.Set(0)
-			consumerCxSuccess.Set(0)
+			consumerFailure.Add(1)
+			consumerCxFailure.Add(1)
 			return fmt.Sprint(err), false
 		}
 
-		consumerSuccess.Set(0)
-		consumerCxSuccess.Set(1)
+		consumerFailure.Add(1)
+		consumerCxSuccess.Add(1)
 
 		return fmt.Sprint(err), false
 	}
 
 	log.Printf("CONSUMER: Consumed message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
 
-	consumerSuccess.Set(1)
-	consumerCxSuccess.Set(1)
+	consumerSuccess.Add(1)
+	consumerCxSuccess.Add(1)
 
 	return string(m.Value), true
 }
