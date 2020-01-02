@@ -30,5 +30,4 @@ By default:
 
 ## To Do
 
-* Tests
 * Log levels
