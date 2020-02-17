@@ -219,8 +219,7 @@ func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 	if pMsg != cMsg {
 		noMatch := "COMPARE: Producer and consumer messages do not match."
 		log.Println(noMatch)
-		// Let Prometheus know we are not in sync
-		inSyncFailure.Add(1)
+
 		// Try to catch up by comsuming again
 		log.Println("COMPARE: Launching another consumer to catch up ...")
 
@@ -275,8 +274,6 @@ func produce(kafkaURL string, topic string) (string, bool) {
 	err := writer.WriteMessages(context.Background(), msg)
 	if err != nil {
 		log.Println("PRODUCER:", err)
-
-		producerFailure.Add(1)
 
 		pCxError := strings.Contains(fmt.Sprint(err), "dial tcp")
 		if pCxError == true {
