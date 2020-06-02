@@ -88,17 +88,17 @@ var (
 	)
 )
 
-func newKafkaWriter(kafkaURL, topic string) *kafka.Writer {
+func newKafkaWriter(kafkaURL []string, topic string) *kafka.Writer {
 	return kafka.NewWriter(kafka.WriterConfig{
-		Brokers:  []string{kafkaURL},
+		Brokers:  kafkaURL,
 		Topic:    topic,
 		Balancer: &kafka.LeastBytes{},
 	})
 }
 
-func getKafkaReader(kafkaURL, topic, groupID string) *kafka.Reader {
+func getKafkaReader(kafkaURL []string, topic, groupID string) *kafka.Reader {
 	return kafka.NewReader(kafka.ReaderConfig{
-		Brokers:     []string{kafkaURL},
+		Brokers:     kafkaURL,
 		GroupID:     groupID,
 		Topic:       topic,
 		MaxWait:     5 * time.Second,
@@ -133,11 +133,14 @@ func main() {
 	go promMetrics()
 
 	// Get Kafka URL from env var
-	kafkaURL, error := os.LookupEnv("KAFKA_URL")
+	URLs, error := os.LookupEnv("KAFKA_URL")
 	if error != true {
 		log.Fatal("KAFKA_URL has not been set.")
 		return
 	}
+
+	kafkaURL := strings.Split(URLs, ", ")
+
 	// Get Kafka topic from env var
 	topic, error := os.LookupEnv("KAFKA_TOPIC")
 	if error != true {
@@ -148,7 +151,7 @@ func main() {
 	loop(kafkaURL, topic)
 }
 
-func loop(kafkaURL string, topic string) {
+func loop(kafkaURL []string, topic string) {
 	ticker := time.NewTicker(1 * time.Minute)
 
 	for range ticker.C {
@@ -172,7 +175,7 @@ func loop(kafkaURL string, topic string) {
 	backoffLoop(kafkaURL, topic)
 }
 
-func backoffLoop(kafkaURL string, topic string) {
+func backoffLoop(kafkaURL []string, topic string) {
 	// We can use a ticker to get the current replica count
 	// every x amount of time, with an exponential backoff
 	exponentialBackOff := &backoff.ExponentialBackOff{
@@ -214,7 +217,7 @@ func backoffLoop(kafkaURL string, topic string) {
 	loop(kafkaURL, topic)
 }
 
-func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
+func compare(pMsg string, cMsg string, kafkaURL []string, topic string) bool {
 	// Compare produced && consumed messages
 	if pMsg != cMsg {
 		noMatch := "COMPARE: Producer and consumer messages do not match."
@@ -238,9 +241,9 @@ func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 		// Listen on our channel AND a timeout channel - which ever happens first.
 		select {
 		case res := <-c1:
-			fmt.Println(res)
+			log.Println(res)
 		case <-time.After(10 * time.Second):
-			fmt.Println("CONSUMER: Forced timeout after 10 seconds")
+			log.Println("CONSUMER: Forced timeout after 10 seconds")
 		}
 
 		if pMsg != cMsg {
@@ -258,7 +261,7 @@ func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 	return true
 }
 
-func produce(kafkaURL string, topic string) (string, bool) {
+func produce(kafkaURL []string, topic string) (string, bool) {
 	// Configure writer
 	writer := newKafkaWriter(kafkaURL, topic)
 	defer writer.Close()
@@ -297,7 +300,7 @@ func produce(kafkaURL string, topic string) (string, bool) {
 	return string(msg.Value), true
 }
 
-func consume(kafkaURL string, topic string) (string, bool) {
+func consume(kafkaURL []string, topic string) (string, bool) {
 	// Configure reader
 	reader := getKafkaReader(kafkaURL, topic, "healthcheck")
 	defer reader.Close()

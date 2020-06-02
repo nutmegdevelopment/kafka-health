@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-var kafkaURL = "b-1.krusk-the-barbarian.qibb1j.c3.kafka.eu-west-1.amazonaws.com:9092"
+var kafkaURL = []string{"b-1.agrob-the-orc.g5cim7.c3.kafka.eu-west-1.amazonaws.com:9092, b-2.agrob-the-orc.g5cim7.c3.kafka.eu-west-1.amazonaws.com:9092, b-3.agrob-the-orc.g5cim7.c3.kafka.eu-west-1.amazonaws.com:9092"}
 
 var topic = "healthcheck"
 
