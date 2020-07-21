@@ -1,7 +1,6 @@
 module github.com/chris-vest/kafka-health
 
 require (
-	github.com/DataDog/zstd v1.4.0 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
 	github.com/google/uuid v1.1.1
