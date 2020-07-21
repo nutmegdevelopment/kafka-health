@@ -22,12 +22,29 @@ Requires:
 * `KAFKA_URL` - list of brokers
 * `KAFKA_TOPIC` - health check topic to be used
 
+Optional:
+
+* LOG_LEVEL - log level
+
 ## Health Check Topic
 
 By default:
 
-* Single partition
+* 9 partitions; writing to all partitions using random UUID keys and Murmur2Balancer - this ensures we test all brokers
 
-## To Do
+## Metrics
 
-* Log levels
+Metrics are served on `/metrics`, the following metrics are exported:
+
+```
+producerSuccess - writer succeeds to produce a message
+producerFailure - writer fails to produce a message
+consumerSuccess - reader succeeds to read a message
+consumerFailure - reader fails to read a message
+inSyncSuccess - writer and reader messages are equal
+inSyncFailure - writer and reader messages are not equal, i.e. consumer group could have fallen behind, can be indicative of issues
+producerCxSuccess - writer connection success
+producerCxFailure - writer connection failure
+consumerCxSuccess - reader connection success
+consumerCxFailure - reader connection failure
+```
