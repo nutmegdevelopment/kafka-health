@@ -1,4 +1,4 @@
-module github.com/chris-vest/kafka-health
+module github.com/nutmegdevelopment/kafka-health
 
 require (
 	github.com/cenkalti/backoff v2.2.1+incompatible
