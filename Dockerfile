@@ -2,20 +2,29 @@ FROM golang:alpine AS builder
 
 WORKDIR /app
 
-# Install git.
-# Git is required for fetching the dependencies.
-RUN apk update && apk add --no-cache git
-
 COPY . .
 
-RUN go mod download && \
-    # Build the binary.
-    CGO_ENABLED=0 GOOS=linux go build -o kafka-health -v
+ENV USER=nutmeg
+ENV UID=10001
+RUN adduser \
+		--disabled-password \
+		--gecos "" \
+		--home "/nonexistent" \
+		--shell "/sbin/nologin" \
+		--no-create-home \
+		--uid "${UID}" \
+		"${USER}" && \
+	apk update && apk add --no-cache git && \
+	go mod download && \
+	go mod verify && \
+    CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="-w -s" -o kafka-health -v
 
-FROM gcr.io/distroless/base
+FROM scratch
 
-# Copy our static executable.
+COPY --from=builder /etc/passwd /etc/passwd
+COPY --from=builder /etc/group /etc/group
+COPY --from=alpine:latest /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /app/kafka-health /app/kafka-health
+USER nutmeg:nutmeg
 
-# Run the hello binary.
 ENTRYPOINT ["/app/kafka-health"]

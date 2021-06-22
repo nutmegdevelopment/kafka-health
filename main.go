@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -14,6 +13,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	kafka "github.com/segmentio/kafka-go"
+	"github.com/spf13/viper"
+
+	joonix "github.com/joonix/log"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -88,17 +91,17 @@ var (
 	)
 )
 
-func newKafkaWriter(kafkaURL, topic string) *kafka.Writer {
+func newKafkaWriter(kafkaURL []string, topic string) *kafka.Writer {
 	return kafka.NewWriter(kafka.WriterConfig{
-		Brokers:  []string{kafkaURL},
+		Brokers:  kafkaURL,
 		Topic:    topic,
-		Balancer: &kafka.LeastBytes{},
+		Balancer: kafka.Murmur2Balancer{},
 	})
 }
 
-func getKafkaReader(kafkaURL, topic, groupID string) *kafka.Reader {
+func getKafkaReader(kafkaURL []string, topic, groupID string) *kafka.Reader {
 	return kafka.NewReader(kafka.ReaderConfig{
-		Brokers:     []string{kafkaURL},
+		Brokers:     kafkaURL,
 		GroupID:     groupID,
 		Topic:       topic,
 		MaxWait:     5 * time.Second,
@@ -120,35 +123,88 @@ func promMetrics() {
 	prometheus.MustRegister(producerCxFailure)
 	prometheus.MustRegister(consumerCxSuccess)
 	prometheus.MustRegister(consumerCxFailure)
+
 	// The Handler function provides a default handler to expose metrics
 	// via an HTTP server. "/metrics" is the usual endpoint for that.
-	log.Println("Serving /metrics endpoint.")
+	log.Println("serving /metrics endpoint")
+
 	// Start HTTP server
 	http.Handle("/metrics", promhttp.Handler())
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
+func setup() ([]string, string) {
+	// Log as Fluentd formatter instead of the default
+	// ASCII formatter.
+	log.SetFormatter(joonix.NewFormatter())
+
+	// Output to stdout instead of the default stderr
+	log.SetOutput(os.Stdout)
+
+	// get configuration from file / env
+	logLevel, kafkaURL, kafkaTopic := configure()
+
+	logLevel = strings.ToUpper(logLevel)
+
+	if logLevel == "INFO" {
+		log.SetLevel(log.InfoLevel)
+	} else if logLevel == "DEBUG" {
+		log.SetLevel(log.DebugLevel)
+	} else if logLevel == "WARN" {
+		log.SetLevel(log.WarnLevel)
+	} else if logLevel == "FATAL" {
+		log.SetLevel(log.FatalLevel)
+	} else {
+		log.SetLevel(log.InfoLevel)
+	}
+
+	log.Debug("finished configuring logger")
+
+	return kafkaURL, kafkaTopic
+}
+
+func configure() (string, []string, string) {
+	viper.SetConfigName("config")     // name of config file (without extension)
+	viper.SetConfigType("yaml")       // REQUIRED if the config file does not have the extension in the name
+	viper.AddConfigPath("/etc/conf/") // path to look for the config file in
+	viper.AddConfigPath(".")          // optionally look for config in the working directory
+	err := viper.ReadInConfig()       // find and read the config file
+	if err != nil {
+		// handle errors reading the config file
+		log.Infof("%v - using env vars", err)
+
+		viper.AutomaticEnv()
+
+		viper.BindEnv("log_level")
+		viper.BindEnv("kafka_url")
+		viper.BindEnv("kafka_topic")
+
+		logLevel := viper.GetString("log_level")
+		URLs := viper.GetString("kafka_url")
+		topic := viper.GetString("kafka_topic")
+
+		kafkaURL := strings.Split(URLs, ",")
+
+		return logLevel, kafkaURL, topic
+	}
+
+	logLevel := viper.GetString("log_level")
+	kafkaURL := viper.GetStringSlice("kafka_url")
+	topic := viper.GetString("kafka_topic")
+
+	return logLevel, kafkaURL, topic
+}
+
 func main() {
+	kafkaURL, topic := setup()
+
 	// Prometheus bits
 	go promMetrics()
-
-	// Get Kafka URL from env var
-	kafkaURL, error := os.LookupEnv("KAFKA_URL")
-	if error != true {
-		log.Fatal("KAFKA_URL has not been set.")
-		return
-	}
-	// Get Kafka topic from env var
-	topic, error := os.LookupEnv("KAFKA_TOPIC")
-	if error != true {
-		log.Fatal("KAFKA_TOPIC has not been set.")
-		return
-	}
 
 	loop(kafkaURL, topic)
 }
 
-func loop(kafkaURL string, topic string) {
+func loop(kafkaURL []string, topic string) {
 	ticker := time.NewTicker(1 * time.Minute)
 
 	for range ticker.C {
@@ -172,7 +228,7 @@ func loop(kafkaURL string, topic string) {
 	backoffLoop(kafkaURL, topic)
 }
 
-func backoffLoop(kafkaURL string, topic string) {
+func backoffLoop(kafkaURL []string, topic string) {
 	// We can use a ticker to get the current replica count
 	// every x amount of time, with an exponential backoff
 	exponentialBackOff := &backoff.ExponentialBackOff{
@@ -214,13 +270,12 @@ func backoffLoop(kafkaURL string, topic string) {
 	loop(kafkaURL, topic)
 }
 
-func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
+func compare(pMsg string, cMsg string, kafkaURL []string, topic string) bool {
 	// Compare produced && consumed messages
 	if pMsg != cMsg {
 		noMatch := "COMPARE: Producer and consumer messages do not match."
 		log.Println(noMatch)
-		// Let Prometheus know we are not in sync
-		inSyncFailure.Add(1)
+
 		// Try to catch up by comsuming again
 		log.Println("COMPARE: Launching another consumer to catch up ...")
 
@@ -239,9 +294,9 @@ func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 		// Listen on our channel AND a timeout channel - which ever happens first.
 		select {
 		case res := <-c1:
-			fmt.Println(res)
+			log.Println(res)
 		case <-time.After(10 * time.Second):
-			fmt.Println("CONSUMER: Forced timeout after 10 seconds")
+			log.Println("CONSUMER: Forced timeout after 10 seconds")
 		}
 
 		if pMsg != cMsg {
@@ -259,7 +314,7 @@ func compare(pMsg string, cMsg string, kafkaURL string, topic string) bool {
 	return true
 }
 
-func produce(kafkaURL string, topic string) (string, bool) {
+func produce(kafkaURL []string, topic string) (string, bool) {
 	// Configure writer
 	writer := newKafkaWriter(kafkaURL, topic)
 	defer writer.Close()
@@ -275,8 +330,6 @@ func produce(kafkaURL string, topic string) (string, bool) {
 	err := writer.WriteMessages(context.Background(), msg)
 	if err != nil {
 		log.Println("PRODUCER:", err)
-
-		producerFailure.Add(1)
 
 		pCxError := strings.Contains(fmt.Sprint(err), "dial tcp")
 		if pCxError == true {
@@ -300,7 +353,7 @@ func produce(kafkaURL string, topic string) (string, bool) {
 	return string(msg.Value), true
 }
 
-func consume(kafkaURL string, topic string) (string, bool) {
+func consume(kafkaURL []string, topic string) (string, bool) {
 	// Configure reader
 	reader := getKafkaReader(kafkaURL, topic, "healthcheck")
 	defer reader.Close()
