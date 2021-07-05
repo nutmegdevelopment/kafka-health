@@ -10,7 +10,7 @@ require (
 	github.com/prometheus/common v0.29.0 // indirect
 	github.com/segmentio/kafka-go v0.4.17
 	github.com/sirupsen/logrus v1.8.1
-	github.com/spf13/viper v1.8.0
+	github.com/spf13/viper v1.8.1
 	golang.org/x/sys v0.0.0-20210616094352-59db8d763f22 // indirect
 	google.golang.org/genproto v0.0.0-20210617175327-b9e0b3197ced // indirect
 )
