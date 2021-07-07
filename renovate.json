@@ -1,5 +1,11 @@
 {
   "extends": [
     "config:base"
+  ],
+  "reviewers": [
+    "cmacrae",
+    "chris-vest",
+    "rcjames",
+    "r8474"
   ]
 }
