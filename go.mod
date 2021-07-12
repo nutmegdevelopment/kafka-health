@@ -3,7 +3,7 @@ module github.com/nutmegdevelopment/kafka-health
 require (
 	github.com/cenkalti/backoff/v4 v4.1.1
 	github.com/golang/snappy v0.0.4 // indirect
-	github.com/google/uuid v1.2.0
+	github.com/google/uuid v1.3.0
 	github.com/joonix/log v0.0.0-20200409080653-9c1d2ceb5f1d
 	github.com/klauspost/compress v1.13.1 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
